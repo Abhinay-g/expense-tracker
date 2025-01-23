@@ -3,20 +3,48 @@ import http from 'http';
 import cors from 'cors';
 import dotenv from "dotenv";
 import { ApolloServer } from "@apollo/server";
-import { startStandaloneServer } from "@apollo/server/standalone";
 
 import { connectDB } from "./db/connectDB.js";
 
 import { expressMiddleware } from '@apollo/server/express4';
 import { ApolloServerPluginDrainHttpServer } from '@apollo/server/plugin/drainHttpServer';
+
+import passport from "passport";
+import session from "express-session";
+import connectMongo from "connect-mongodb-session";
+import { buildContext } from "graphql-passport";
+import mergedTypeDefs from "./typedefs/index.js";
+import mergedResolvers from "./resolvers/index.js";
+import { configurePassport } from "./passport/passport.config.js";
+
 dotenv.config();
+configurePassport(); // auth system
 const app = express();
 
 const httpServer = http.createServer(app);
+const MongoDBStore = connectMongo(session); // auth system
+const store = new MongoDBStore({
+	uri: process.env.MONGO_URI,
+	collection: "sessions",
+}); // auth system
 
+store.on("error", (err) => console.log(err)); // auth system
+app.use(
+	session({
+		secret: process.env.SESSION_SECRET,
+		resave: false, // this option specifies whether to save the session to the store on every request
+		saveUninitialized: false, // option specifies whether to save uninitialized sessions
+		cookie: {
+			maxAge: 1000 * 60 * 60 * 24 * 7,
+			httpOnly: true, // this option prevents the Cross-Site Scripting (XSS) attacks
+		},
+		store: store,
+	})
+); // auth system
 
-import mergedResolvers from "./resolvers/index.js";
-import mergedTypeDefs from "./typedefs/index.js";
+app.use(passport.initialize()); // auth system
+app.use(passport.session()); // auth system
+
 const server = new ApolloServer({
     typeDefs :mergedTypeDefs,
     resolvers :mergedResolvers,
@@ -28,16 +56,16 @@ await server.start();
 
 app.use(
     '/',
-    cors(),
+    cors({
+		origin: "http://localhost:3000",
+		credentials: true,
+	}),
     express.json(),
-    // expressMiddleware accepts the same arguments:
-    // an Apollo Server instance and optional configuration options
     expressMiddleware(server, {
-      context: async ({ req }) => ({ req }),
+        context: async ({ req, res }) => buildContext({ req, res }),
     }),
   );
   
-  // Modified server startup
   await new Promise((resolve) =>
     httpServer.listen({ port: 4000 }, resolve),
   );
